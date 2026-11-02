@@ -9,6 +9,8 @@ use rocket::{
 
 use crate::{auth::AuthMode, config::Config, server, storage::StorageMode};
 
+mod github_org;
+
 fn init_test_index_remote() -> anyhow::Result<url::Url> {
     let temp_dir = tempfile::tempdir()?;
     let repo = git2::Repository::init_bare(temp_dir.path())?;
@@ -49,10 +51,14 @@ fn new_client(auth: AuthMode) -> Client {
 }
 
 fn new_client_with_remote(auth: AuthMode, index_url: url::Url) -> Client {
+    client_from_config(test_config(auth, index_url))
+}
+
+fn test_config(auth: AuthMode, index_url: url::Url) -> Config {
     let package_path = tempfile::tempdir().unwrap().keep();
     add_test_packages(&package_path).unwrap();
 
-    let figment = Figment::from(rocket::Config::default()).merge(Serialized::globals(Config {
+    Config {
         index_url,
         storage: StorageMode::Local {
             path: Some(package_path),
@@ -60,7 +66,16 @@ fn new_client_with_remote(auth: AuthMode, index_url: url::Url) -> Client {
         auth,
         github_token: None,
         minimum_wally_version: None,
-    }));
+        ci_publish_key: None,
+        legacy_api_key: None,
+        audit_log_path: None,
+        audit_webhook: None,
+        github_api_url: String::from("http://127.0.0.1:9"),
+    }
+}
+
+fn client_from_config(config: Config) -> Client {
+    let figment = Figment::from(rocket::Config::default()).merge(Serialized::globals(config));
 
     Client::tracked(server(figment)).expect("valid rocket instance")
 }

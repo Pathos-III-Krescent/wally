@@ -11,6 +11,8 @@ use rocket::{
 };
 use serde::Serialize;
 
+use crate::audit::AuditContext;
+
 pub trait ApiErrorContext<T> {
     fn status(self, status: Status) -> Result<T, Error>;
 }
@@ -80,7 +82,9 @@ where
 }
 
 impl<'r> Responder<'r, 'static> for Error {
-    fn respond_to(self, _request: &'r Request<'_>) -> rocket::response::Result<'static> {
+    fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
+        AuditContext::of(request).set_reason(&self.message);
+
         let response = ErrorResponse {
             message: self.message,
         };

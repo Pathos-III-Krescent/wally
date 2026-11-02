@@ -5,7 +5,8 @@
 address = "0.0.0.0"
 port = 8000
 index_url = "https://github.com/Pathos-III-Krescent/wally-index"
-auth = { type = "api-key", value = "this-should-be-changed" }
+# There is deliberately no default `auth`. In release builds the server refuses
+# to start unless WALLY_auth is set, so it can never fall back to a known key.
 storage = { type = "local" }
 
 [debug]

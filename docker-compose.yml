@@ -4,8 +4,13 @@ services:
     environment:
       - WALLY_auth=${WALLY_auth}
       - WALLY_github_token=${WALLY_github_token}
+      - WALLY_ci_publish_key=${WALLY_ci_publish_key:-}
+      - WALLY_legacy_api_key=${WALLY_legacy_api_key:-}
+      - WALLY_audit_webhook=${WALLY_audit_webhook:-}
+      - WALLY_audit_log_path=/app/audit/audit.log
     volumes:
       - packages:/app/packages
+      - audit:/app/audit
     networks:
       - traefik
     deploy:
@@ -20,3 +25,4 @@ networks:
 
 volumes:
   packages:
+  audit:
