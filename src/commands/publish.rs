@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use structopt::StructOpt;
 use ubyte::ToByteUnit;
 use url::Url;
 
 use crate::{
-    auth::AuthStore, manifest::Manifest, package_contents::PackageContents,
-    package_index::PackageIndex, GlobalOptions,
+    GlobalOptions, auth::AuthStore, manifest::Manifest, package_contents::PackageContents,
+    package_index::PackageIndex,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -82,12 +82,15 @@ impl PublishSubcommand {
             .body(contents.data().to_owned())
             .send()?;
 
-        if response.status().is_success() {
-            println!("Package published successfully!");
-        } else {
-            println!("Error: {}", response.status());
-            println!("{}", response.text()?);
+        if !response.status().is_success() {
+            bail!(
+                "Failed to publish package: {}\n{}",
+                response.status(),
+                response.text()?
+            );
         }
+
+        println!("Package published successfully!");
 
         Ok(())
     }

@@ -1,9 +1,11 @@
 #[macro_use]
 extern crate rocket;
 
+mod audit;
 mod auth;
 mod config;
 mod error;
+mod github;
 mod search;
 mod storage;
 
@@ -12,15 +14,17 @@ mod tests;
 
 use std::convert::TryInto;
 use std::io::{Cursor, Read, Seek};
+use std::path::Path;
 use std::sync::RwLock;
+use std::time::Duration;
 
-use anyhow::{format_err, Context};
+use anyhow::{Context, format_err};
 use figment::{
-    providers::{Env, Format, Toml},
     Figment,
+    providers::{Env, Format, Toml},
 };
 use libwally::{
-    manifest::{Manifest, MANIFEST_FILE_NAME},
+    manifest::{MANIFEST_FILE_NAME, Manifest},
     package_id::PackageId,
     package_index::PackageIndex,
     package_name::PackageName,
@@ -30,22 +34,24 @@ use rocket::http::Header;
 use rocket::request::{FromRequest, Outcome};
 use rocket::response::stream::ReaderStream;
 use rocket::serde::json::Json;
+use rocket::{Build, Request, Response};
 use rocket::{
+    State,
     data::{Data, ToByteUnit},
     fairing::AdHoc,
     http::{ContentType, Status},
     response::content,
-    State,
 };
-use rocket::{Build, Request, Response};
 use semver::Version;
 use serde_json::json;
 use storage::StorageMode;
 use zip::ZipArchive;
 
-use crate::auth::{ReadAccess, WriteAccess};
+use crate::audit::{AuditContext, AuditLog};
+use crate::auth::{AuthMode, ReadAccess, WriteAccess};
 use crate::config::Config;
 use crate::error::{ApiErrorContext, ApiErrorStatus, Error};
+use crate::github::GithubOrgAuth;
 use crate::search::SearchBackend;
 use crate::storage::{GcsStorage, LocalStorage, StorageBackend, StorageOutput};
 
@@ -130,6 +136,7 @@ async fn publish(
     index: &State<PackageIndex>,
     authorization: Result<WriteAccess, Error>,
     _cli_version: Result<WallyVersion, Error>,
+    audit: &AuditContext,
     data: Data<'_>,
 ) -> Result<Json<serde_json::Value>, Error> {
     _cli_version?;
@@ -154,6 +161,7 @@ async fn publish(
 
     let manifest = get_manifest(&mut archive).status(Status::BadRequest)?;
     let package_id = manifest.package_id();
+    audit.set_package(&package_id);
 
     if !authorization.can_write_package(&package_id, &index)? {
         return Err(format_err!(
@@ -175,12 +183,12 @@ async fn publish(
 
     let package_metadata = index.get_package_metadata(manifest.package_id().name());
 
-    if let Ok(metadata) = package_metadata {
-        if metadata.versions.iter().any(|published_manifest| {
+    if let Ok(metadata) = package_metadata
+        && metadata.versions.iter().any(|published_manifest| {
             published_manifest.package.version == manifest.package.version
-        }) {
-            return Err(format_err!("package already exists in index").status(Status::Conflict));
-        }
+        })
+    {
+        return Err(format_err!("package already exists in index").status(Status::Conflict));
     }
 
     storage
@@ -225,8 +233,40 @@ fn get_manifest<R: Read + Seek>(archive: &mut ZipArchive<R>) -> anyhow::Result<M
 
 pub fn server(figment: Figment) -> rocket::Rocket<Build> {
     let config: Config = figment.extract().expect("could not read configuration");
+    config.validate().expect("invalid configuration");
 
     println!("Using authentication mode: {:?}", config.auth);
+
+    let github_org_auth = match &config.auth {
+        AuthMode::GithubOrg {
+            org,
+            cache_ttl_secs,
+            ..
+        } => Some(GithubOrgAuth::new(
+            &config.github_api_url,
+            config.github_token.as_deref().unwrap(),
+            org,
+            Duration::from_secs(*cache_ttl_secs),
+        )),
+        _ => None,
+    };
+
+    let audit_log = AuditLog::new(
+        config.audit_log_path.as_deref().map(Path::new),
+        config.audit_webhook.clone(),
+    )
+    .expect("could not set up audit log");
+    println!(
+        "Writing audit log to stdout{}{}",
+        match &config.audit_log_path {
+            Some(path) => format!(" and {}", path),
+            None => String::new(),
+        },
+        match &config.audit_webhook {
+            Some(_) => " and the audit webhook",
+            None => "",
+        }
+    );
 
     println!("Using storage backend: {:?}", config.storage);
     let storage_backend: Box<dyn StorageBackend> = match config.storage {
@@ -246,7 +286,7 @@ pub fn server(figment: Figment) -> rocket::Rocket<Build> {
     println!("Initializing search backend...");
     let search_backend = SearchBackend::new(&package_index).unwrap();
 
-    rocket::custom(figment)
+    let rocket = rocket::custom(figment)
         .mount(
             "/",
             routes![
@@ -263,15 +303,21 @@ pub fn server(figment: Figment) -> rocket::Rocket<Build> {
         .manage(RwLock::new(search_backend))
         .attach(AdHoc::config::<Config>())
         .attach(Cors)
+        .attach(audit_log);
+
+    match github_org_auth {
+        Some(github_org_auth) => rocket.manage(github_org_auth),
+        None => rocket,
+    }
 }
 
 fn configure_gcs(bucket: String, cache_size: Option<u64>) -> anyhow::Result<GcsStorage> {
     use cloud_storage_lite::{
-        token_provider::{
-            oauth::{OAuthTokenProvider, ServiceAccount, SCOPE_STORAGE_FULL_CONTROL},
-            RenewingTokenProvider,
-        },
         Client,
+        token_provider::{
+            RenewingTokenProvider,
+            oauth::{OAuthTokenProvider, SCOPE_STORAGE_FULL_CONTROL, ServiceAccount},
+        },
     };
 
     let token_provider = RenewingTokenProvider::new(OAuthTokenProvider::new(
@@ -287,7 +333,7 @@ fn configure_gcs(bucket: String, cache_size: Option<u64>) -> anyhow::Result<GcsS
 fn configure_s3(bucket: String, cache_size: Option<u64>) -> anyhow::Result<S3Storage> {
     use std::env;
 
-    use rusoto_core::{credential::ChainProvider, request::HttpClient, Region};
+    use rusoto_core::{Region, credential::ChainProvider, request::HttpClient};
 
     use rusoto_s3::S3Client;
 

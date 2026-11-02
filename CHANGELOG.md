@@ -1,11 +1,20 @@
 # Wally Changelog
 
 ## Unreleased Changes
-* Added --locked flag for the install subcommand ([#119])
-* Improved lockfile formatting for better text diffs ([#214])
+* Added homepage and repository fields to package manifest ([#211])
+* Improved lockfile formatting for better text diffs **lockfiles will change** ([#214])
+* Fixed building the CLI on its own, such as with `cargo install` ([#218])
+* Upgraded dependencies ([#267])
+* Pre-built binaries are now available for Windows, macOS, and Linux on both x86_64 and aarch64 ([#267])
+* Upgrade Rust edition to 2024 ([#273])
+* Fixed `wally publish` exiting successfully when the registry rejects the upload ([#274])
 
-[#119]: https://github.com/UpliftGames/wally/pull/119
+[#211]: https://github.com/UpliftGames/wally/pull/211
 [#214]: https://github.com/UpliftGames/wally/pull/214
+[#218]: https://github.com/UpliftGames/wally/pull/218
+[#267]: https://github.com/UpliftGames/wally/pull/267
+[#273]: https://github.com/UpliftGames/wally/pull/273
+[#259]: https://github.com/UpliftGames/wally/pull/274
 
 ## 0.3.2 (2023-06-05)
 * Added private field to package manifest ([#9])([#76])
