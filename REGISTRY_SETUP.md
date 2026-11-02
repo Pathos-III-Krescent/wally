@@ -113,7 +113,7 @@ All the settings:
 | `WALLY_ci_publish_key` | No | Lets CI publish. Can't download. |
 | `WALLY_legacy_api_key` | No | **Temporary.** The old shared key keeps working (download + publish) so nobody breaks mid-switch. Remove it in step 6. |
 | `WALLY_audit_webhook` | No | Discord webhook. Gets a message for every publish and every denied request. If Discord is down, requests still work. |
-| `WALLY_audit_log_path` | Set by `docker-compose.yml` | Audit log file, `/app/audit/audit.log` on the `audit` volume. |
+| `WALLY_audit_log_path` | Set by `docker-compose.yml` | Audit log file, `/app/audit/audit.log` in the container = `/var/log/wally/audit.log` on the server. |
 
 Leaving an optional value empty (`WALLY_ci_publish_key=`) is the same as not setting it.
 
@@ -232,16 +232,17 @@ Tokens, keys, and `Authorization` headers are **never** logged.
    ```sh
    docker compose logs wally-backend | grep '"event":"package.'
    ```
-2. **A file** on the `audit` Docker volume, which survives restarts and upgrades:
+2. **A file on the server**, `/var/log/wally/audit.log`, which survives restarts and upgrades.
+   Run these on the server itself:
    ```sh
-   docker compose exec wally-backend tail -n 50 /app/audit/audit.log
+   tail -n 50 /var/log/wally/audit.log
    # Only denied requests (needs jq):
-   docker compose exec wally-backend cat /app/audit/audit.log | jq -c 'select(.result=="denied")'
+   jq -c 'select(.result=="denied")' /var/log/wally/audit.log
    # Who is still using the old shared key?
-   docker compose exec wally-backend grep legacy-key /app/audit/audit.log
+   grep legacy-key /var/log/wally/audit.log
    ```
-   The file only ever grows (about 300 bytes per request). If it gets big, copy it
-   somewhere and start a new one.
+   The file only ever grows (about 300 bytes per request). To rotate it with
+   logrotate, use `copytruncate` so the server keeps writing to the same file.
 3. **Discord** (if `WALLY_audit_webhook` is set): publishes and denied requests.
 
 ## Troubleshooting
@@ -255,12 +256,12 @@ Tokens, keys, and `Authorization` headers are **never** logged.
 | `The CI key can only publish packages` | Expected: the CI key can't download. |
 | `Could not check GitHub membership` | The server's `WALLY_github_token` expired or lacks **Members → Read-only**. |
 | Server won't start: `missing field auth` | `WALLY_auth` isn't set in `.env`. This is on purpose. |
-| Server won't start: `could not open audit log` | The `audit` volume isn't writable. See below. |
+| Server won't start: `could not open audit log` | `/var/log/wally` is missing or not writable. See below. |
 
-**About the `could not open audit log` error:** the image creates `/app/audit`
-owned by the app user, so a new volume just works. If an old volume was
-created as root, fix it once:
-`docker compose run --rm -u root wally-backend chown 1000 /app/audit`.
+**About the `could not open audit log` error:** the server runs as user ID
+1000, and `/var/log/wally` on the server must exist and be writable by it.
+Create it once on the server (on every Swarm node the service can run on):
+`sudo mkdir -p /var/log/wally && sudo chown 1000:1000 /var/log/wally`.
 
 ## Good to know
 

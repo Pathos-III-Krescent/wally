@@ -10,7 +10,7 @@ services:
       - WALLY_audit_log_path=/app/audit/audit.log
     volumes:
       - packages:/app/packages
-      - audit:/app/audit
+      - /var/log/wally:/app/audit
     networks:
       - traefik
     deploy:
@@ -25,4 +25,3 @@ networks:
 
 volumes:
   packages:
-  audit:
